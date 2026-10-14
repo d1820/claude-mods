@@ -1,0 +1,9 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "Dan Turco" },
+  "plugins": [
+    { "name": "activity", "source": "./activity" },
+    { "name": "truncation-guard", "source": "./truncation-guard" },
+    { "name": "commit-safety", "source": "./commit-safety" }
+  ]
+}

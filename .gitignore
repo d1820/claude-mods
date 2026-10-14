@@ -1,0 +1,5 @@
+# Engine-generated type stubs (written when a mod loads; regenerated per machine)
+**/.claude-plugin/types/
+
+# Node / tooling
+node_modules/

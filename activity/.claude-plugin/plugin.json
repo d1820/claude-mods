@@ -1,0 +1,21 @@
+{
+  "name": "activity",
+  "version": "0.1.6",
+  "author": { "name": "Dan Turco" },
+  "description": "Live activity: turn time + tool count in a band, per-tool and subagent detail (status, elapsed, turns, tokens) in a pane, and a native notification when a long turn ends or Claude asks a question.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "workItemsUrl": {
+      "type": "string",
+      "title": "Work items base URL",
+      "description": "Azure DevOps work-items base URL; the band's WI link points here (e.g. https://org.visualstudio.com/PROJECT/_workitems/edit). Leave blank to hide the link.",
+      "default": ""
+    },
+    "extraRageWords": {
+      "type": "string",
+      "title": "Extra rage words",
+      "description": "Comma/space separated words appended to the built-in rage-meter list (whole-word, case-insensitive). The 🤬 counter adds 1 per message that trips any built-in OR custom word, or that is written mostly in UPPERCASE.",
+      "default": ""
+    }
+  }
+}

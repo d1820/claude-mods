@@ -1,0 +1,6 @@
+{
+  "name": "truncation-guard",
+  "version": "0.1.1",
+  "author": { "name": "Dan Turco" },
+  "description": "Blocks truncating command output (head/tail/sed -n/Get-Content -TotalCount/Select-Object -First) so full output is captured to a file and read."
+}
