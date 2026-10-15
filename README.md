@@ -156,11 +156,6 @@ tsc -p <mod>                     # type-check (needs the engine-generated types)
 
 
 Display
-╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────✕─╮
-│ last 6s · 0 tools · 0 tok                                                                                                          🤬 2  interrupts 8/24 │
-│ Subagents                                        Tools                                                  Recent                                           │
-│ none                                             Bash ×24 · 1076s                                       done Read                                        │
-│                                                  Edit ×31 · 942s                                        done Write                                       │
-│                                                  Read ×27 · 891s                                        done Bash                                        │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-session 102 tools · 134.9k tok  [ Hide ]                                                                                                                [-]
+
+<img width="1890" height="233" alt="image" src="https://github.com/user-attachments/assets/7f69ac7c-a48d-46d9-97cb-591e3b2c5870" />
+
