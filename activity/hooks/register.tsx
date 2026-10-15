@@ -118,7 +118,40 @@ let branch = ''
 let repoRoot = ''
 let branchTries = 0
 
-// Detect branch -> WI (+ recover plan/artifact from $.store) from .git/HEAD.
+// Resolve the git branch for a directory, handling three cases the old ".git/HEAD" read
+// missed: a deep SUBFOLDER (walk up to the repo root), a normal checkout (.git is a dir ->
+// .git/HEAD), and a WORKTREE (.git is a FILE "gitdir: <path>" -> <path>/HEAD). Returns the
+// repo/worktree root + branch name, or null when no git is found.
+async function resolveGit(
+  $: EngineInterface,
+  startDir: string,
+): Promise<{ root: string; branch: string } | null> {
+  let dir = startDir.replace(/\\/g, '/').replace(/\/+$/, '')
+  for (let i = 0; i < 12 && dir; i++) {
+    let head: string | null = null
+    try {
+      head = await $.fs.read(`${dir}/.git/HEAD`) // .git is a directory
+    } catch {
+      try {
+        const dotgit = await $.fs.read(`${dir}/.git`) // .git is a file (worktree)
+        const gm = dotgit.match(/gitdir:\s*(.+)/)
+        if (gm?.[1]) head = await $.fs.read(`${gm[1].trim().replace(/\\/g, '/')}/HEAD`)
+      } catch {
+        /* no .git here */
+      }
+    }
+    if (head) {
+      const bm = head.match(/ref:\s*refs\/heads\/(.+)/)
+      return { root: dir, branch: bm?.[1]?.trim() ?? '' }
+    }
+    const parent = dir.replace(/\/[^/]+$/, '')
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+// Detect branch -> WI (+ recover plan/artifact from $.store).
 // Runs on session.start AND every turn until detected — session.start does NOT
 // fire on /reload-plugins, so a turn is the only reliable trigger then.
 async function ensureContext($: EngineInterface): Promise<void> {
@@ -127,10 +160,9 @@ async function ensureContext($: EngineInterface): Promise<void> {
   branchTries++
   try {
     const cwd = await $.session.cwd()
-    repoRoot = cwd ? cwd.replace(/\\/g, '/') : ''
-    const head = await $.fs.read(`${repoRoot}/.git/HEAD`)
-    const bm = head.match(/ref:\s*refs\/heads\/(.+)/)
-    branch = bm?.[1]?.trim() ?? ''
+    const git = cwd ? await resolveGit($, cwd) : null
+    repoRoot = git?.root ?? (cwd ? cwd.replace(/\\/g, '/') : '')
+    branch = git?.branch ?? ''
     const m = branch.match(/(?:^|[-_/])(\d{4,6})(?:[-_/]|$)/)
     if (m?.[1]) await update($, wi, () => m[1] ?? null)
     if (branch) {
@@ -457,8 +489,13 @@ export const register: Register = (on, options) => {
         <Text dimColor>{`session ${sessionTools} tools · ${fmtTokens(tok)} tok `}</Text>
         {plan && <Text dimColor>· plan: </Text>}
         {plan && <Link href={`vscode://file/${PLANS}/${plan}`}>{plan}</Link>}
-        {w && workItemsUrl && <Text dimColor> · </Text>}
-        {w && workItemsUrl && <Link href={`${workItemsUrl}/${w}`}>{`WI ${w}`}</Link>}
+        {w && <Text dimColor> · </Text>}
+        {w &&
+          (workItemsUrl ? (
+            <Link href={`${workItemsUrl}/${w}`}>{`WI ${w}`}</Link>
+          ) : (
+            <Text dimColor>{`WI ${w}`}</Text>
+          ))}
         <Text dimColor> </Text>
         <Button
           key="hide"
