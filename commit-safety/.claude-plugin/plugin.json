@@ -1,6 +1,6 @@
 {
   "name": "commit-safety",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": { "name": "Dan Turco" },
-  "description": "Enforces git commit hard-rules: blocks blanket staging (add -A/./-u), git mv, pushes to main, and inline multiline -m; warns on --amend."
+  "description": "Enforces git commit hard-rules: blocks blanket staging (add -A/./-u/--update), git mv, pushes to main, inline multiline -m, multiple -m/--message, and @'...'@ here-string messages; warns on --amend."
 }

@@ -10,10 +10,10 @@ export const register: Register = on => {
     const cmd = raw.trim()
 
     const add = cmd.match(/\bgit\s+add\s+(.+)/i)
-    if (add && /(^|\s)(-A|--all|-u|\.)(\s|$)/.test(add[1] ?? '')) {
+    if (add && /(^|\s)(-A|--all|-u|--update|\.)(\s|$)/.test(add[1] ?? '')) {
       return {
         deny:
-          'Blanket staging is blocked (CLAUDE.md): never git add -A / . / -u. Stage explicit paths — one per file discussed.',
+          'Blanket staging is blocked (CLAUDE.md): never git add -A / . / -u / --update. Stage explicit paths — one per file discussed.',
       }
     }
 
@@ -25,10 +25,24 @@ export const register: Register = on => {
       return { deny: 'main is protected: do not push to main. Open a PR from a branch.' }
     }
 
-    if (/\bgit\s+commit\b/i.test(cmd) && /-m\b/i.test(cmd) && /\n/.test(raw)) {
-      return {
-        deny:
-          'Inline multiline -m is blocked (CLAUDE.md). Write the message to a file and use git commit -F <file>.',
+    if (/\bgit\s+commit\b/i.test(cmd)) {
+      if (/@'/.test(raw)) {
+        return {
+          deny:
+            "@'...'@ here-strings for a commit message are blocked (CLAUDE.md). Write the message to a file and use git commit -F <file>.",
+        }
+      }
+      if ((cmd.match(/(^|\s)(-m|--message)\b/gi) ?? []).length >= 2) {
+        return {
+          deny:
+            'Multiple -m/--message flags are blocked (CLAUDE.md). Write the full message to a file and use git commit -F <file>.',
+        }
+      }
+      if (/(-m|--message)\b/i.test(cmd) && /\n/.test(raw)) {
+        return {
+          deny:
+            'Inline multiline -m is blocked (CLAUDE.md). Write the message to a file and use git commit -F <file>.',
+        }
       }
     }
 

@@ -1,0 +1,6 @@
+{
+  "name": "shell-guard",
+  "version": "0.1.0",
+  "author": { "name": "Dan Turco" },
+  "description": "Blocks in-place file mutation via the shell (sed -i, perl -i clusters, awk -i inplace) on the model's tool calls — the Edit tool is the correct way to modify files. Fail-closed; tight default list, extensible in register.ts."
+}

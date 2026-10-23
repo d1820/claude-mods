@@ -4,6 +4,7 @@
   "plugins": [
     { "name": "activity", "source": "./activity" },
     { "name": "truncation-guard", "source": "./truncation-guard" },
-    { "name": "commit-safety", "source": "./commit-safety" }
+    { "name": "commit-safety", "source": "./commit-safety" },
+    { "name": "shell-guard", "source": "./shell-guard" }
   ]
 }

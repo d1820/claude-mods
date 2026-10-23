@@ -1,14 +1,15 @@
 # claude-mods
 
-A personal marketplace of [Claude Code](https://claude.com/claude-code) **mods** (plugins) — a live activity pane plus two safety guards for shell output and git commits.
+A personal marketplace of [Claude Code](https://claude.com/claude-code) **mods** (plugins) — a live activity pane plus three safety guards for shell output, git commits, and in-place file edits.
 
 | Plugin | What it does |
 | --- | --- |
 | **activity** | A live band above the prompt + a detail pane: turn time, tool counts, token usage, active plan / work-item / artifacts links, subagent and per-tool breakdowns, an interrupts gauge, and a 🤬 rage meter. |
 | **truncation-guard** | Blocks shell commands that truncate their own output (`head`/`tail`/`sed -n`/`Get-Content -TotalCount`/`Select-Object -First`), so the full output is captured to a file and read. |
 | **commit-safety** | Enforces git hygiene: blocks blanket staging (`git add -A`/`.`/`-u`), `git mv`, pushes to `main`, and inline multi-line `-m` commits; warns on `--amend`. |
+| **shell-guard** | Blocks in-place file mutation via the shell (`sed -i`, `perl -i` clusters, `awk -i inplace`) — the Edit tool is the correct way to change files. Fail-closed; tight default list, extensible in `register.ts`. |
 
-All three are hooks-only, fail **open** (a mod error never blocks your real work), and act on the **model's** tool calls — not on commands you run yourself with the `!` prefix.
+All are hooks-only and act on the **model's** tool calls — not on commands you run yourself with the `!` prefix. `activity`, `truncation-guard`, and `commit-safety` fail **open** (a mod error never blocks your real work); `shell-guard` deliberately fails **closed** — if its guard can't run, a matching in-place edit is denied rather than slipped through.
 
 ---
 
@@ -29,6 +30,7 @@ claude plugin marketplace add d1820/claude-mods
 claude plugin install activity@claude-mods
 claude plugin install truncation-guard@claude-mods
 claude plugin install commit-safety@claude-mods
+claude plugin install shell-guard@claude-mods
 ```
 
 `marketplace add` also accepts a git/https URL or a local path, e.g. `claude plugin marketplace add C:\Dev\claude-mods`.
@@ -111,6 +113,24 @@ Session-scoped: it resets on a new session and survives `/reload-plugins`.
 | `extraRageWords` | `""` | Comma/space-separated words **appended** to the built-in rage list (whole-word, case-insensitive). |
 
 Profile paths (`~/.claude/plans`, `~/.claude/artifacts`) are resolved at runtime from `USERPROFILE`/`HOME`, so the mod is portable across machines and OSes.
+
+---
+
+## shell-guard
+
+Blocks the **model** from editing files through the shell when the Edit tool is the right tool. Any in-place file *mutator* is denied (fail-closed); reads and redirects are always allowed.
+
+**Default deny list** (in `hooks/register.ts`, kept deliberately tight):
+
+| Rule | Blocks | Allows |
+| --- | --- | --- |
+| `sed-in-place` | `sed -i`, `-i.bak`, `--in-place` (incl. `… \| sed -i`) | `sed 's/…' f > out`, `sed -n '1,5p' f` |
+| `perl-in-place` | `perl` with an `i` flag cluster (`-i`, `-pi`, `-ni`, `-i.bak`) | `perl -e`, `perl -ne` |
+| `awk-in-place` | `awk`/`gawk -i inplace` | `awk '…' f`, `awk '…' f > out` |
+
+**Expand it:** add a `{ id, re, msg }` entry to the `RULES` array in `register.ts` (one line), or add an escape-hatch regex to `ALLOW` to permit a narrow legitimate case. Keep the list to in-place *mutators* — reads and redirects must stay allowed.
+
+Pairs with the coarse `permissions.deny` globs (`sed -i *`, `perl -i *`) in `settings.json`, which stay as the platform-level fail-closed floor if the mod is ever disabled. Covered by `claude plugin test shell-guard` (13 deny/allow cases).
 
 ---
 
