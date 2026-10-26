@@ -81,6 +81,10 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
+// The filename of a path (for display); the planName atom stores a full path.
+const baseName = (p: string): string =>
+  p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1)
+
 // --- Interrupts (friction) tally: THIS SESSION only, held in $.state ---
 // Counts main-loop turns and how many you hard-interrupted (turn.complete isAborted).
 // Session-scoped (like sessionTok): survives /reload-plugins, resets on a new session.
@@ -117,6 +121,93 @@ async function resolveArtifactDir(
 let branch = ''
 let repoRoot = ''
 let branchTries = 0
+
+// A plan file touched under the repo: `<repoRoot>/<child>/plans/<name>.md` — one
+// directory deep, which covers both `<repoRoot>/.claude/plans` and any
+// `<repoRoot>/<dir>/plans`. Returns the bare filename, else null. Bounded to
+// repoRoot so an unrelated `plans/` folder elsewhere never trips it.
+function matchProjectPlan(fp: string): string | null {
+  if (!repoRoot || !fp) return null
+  const n = fp.replace(/\\/g, '/')
+  if (!n.toLowerCase().startsWith(repoRoot.toLowerCase() + '/')) return null
+  const rel = n.slice(repoRoot.length + 1)
+  const m = rel.match(/^[^/]+\/plans\/([^/]+\.md)$/i)
+
+  return m?.[1] ?? null
+}
+
+// Candidate plan directories in precedence order: the profile home first (the
+// canonical location), then every `<repoRoot>/<child>/plans` (covers
+// `<repoRoot>/.claude/plans` and any `<repoRoot>/<dir>/plans`). Deduped.
+async function planDirs($: EngineInterface): Promise<string[]> {
+  await ensureEnv($)
+  const dirs: string[] = []
+  if (PLANS) dirs.push(PLANS)
+  if (repoRoot) {
+    try {
+      for (const k of await $.fs.list(repoRoot)) {
+        if (k.kind === 'dir') dirs.push(`${repoRoot}/${k.name}/plans`)
+      }
+    } catch {
+      /* repo root unreadable */
+    }
+  }
+
+  return [...new Set(dirs)]
+}
+
+// Resolve a bare plan filename to a full path. When the same name exists in more
+// than one candidate dir, the most recently modified copy wins (mtime from the
+// directory listing — no extra stat). Null when it is in none of them.
+async function resolvePlanPath($: EngineInterface, name: string): Promise<string | null> {
+  let best: { path: string; mtimeMs: number } | null = null
+  for (const dir of await planDirs($)) {
+    let files
+    try {
+      files = await $.fs.list(dir)
+    } catch {
+      continue // dir does not exist here
+    }
+    const hit = files.find(f => f.kind === 'file' && f.name === name)
+    if (hit && (best === null || hit.mtimeMs > best.mtimeMs)) {
+      best = { path: `${dir}/${name}`, mtimeMs: hit.mtimeMs }
+    }
+  }
+
+  return best?.path ?? null
+}
+
+// Normalize a stored plan value to a usable path. New values are already full
+// paths; a legacy bare filename (from an earlier version) is resolved (newest-
+// mtime), falling back to the profile dir so a link is never empty.
+async function asPlanPath($: EngineInterface, stored: string): Promise<string> {
+  if (stored.includes('/') || stored.includes('\\')) return stored
+
+  return (await resolvePlanPath($, stored)) ?? `${PLANS}/${stored}`
+}
+
+// The most recently modified `*.md` across all candidate dirs, optionally limited
+// to names containing `fragment`. Null when none match. Drives both `/plan <q>`
+// and the inline refresh token.
+async function newestPlan($: EngineInterface, fragment = ''): Promise<string | null> {
+  let best: { path: string; mtimeMs: number } | null = null
+  for (const dir of await planDirs($)) {
+    let files
+    try {
+      files = await $.fs.list(dir)
+    } catch {
+      continue // dir does not exist here
+    }
+    for (const f of files) {
+      if (f.kind !== 'file' || !f.name.endsWith('.md') || !f.name.includes(fragment)) continue
+      if (best === null || f.mtimeMs > best.mtimeMs) {
+        best = { path: `${dir}/${f.name}`, mtimeMs: f.mtimeMs }
+      }
+    }
+  }
+
+  return best?.path ?? null
+}
 
 // Resolve the git branch for a directory, handling three cases the old ".git/HEAD" read
 // missed: a deep SUBFOLDER (walk up to the repo root), a normal checkout (.git is a dir ->
@@ -231,31 +322,23 @@ export const register: Register = (on, options) => {
     await ensureEnv($)
     const q = e.args.trim()
     if (q) {
-      try {
-        const files = await $.fs.list(PLANS)
-        const match = files.find(
-          f => f.kind === 'file' && f.name.endsWith('.md') && f.name.includes(q),
-        )
-        if (match) {
-          await update($, planName, () => match.name)
-          if (branch) await $.store.set(`plan:${branch}`, match.name)
+      // Across every layer, the newest-modified file whose name contains the
+      // fragment wins (the plan you touched most recently is almost always the one).
+      const path = await newestPlan($, q)
+      if (path) {
+        await update($, planName, () => path)
+        if (branch) await $.store.set(`plan:${branch}`, path)
 
-          return { text: `Active plan set: ${match.name}` }
-        }
-
-        return { text: `No plan file matching "${q}" in ${PLANS}` }
-      } catch {
-        return { text: 'Could not read the plans folder.' }
+        return { text: `Active plan set: ${path}` }
       }
+
+      return { text: `No plan file matching "${q}" in: ${(await planDirs($)).join(', ')}` }
     }
 
     const cur = await read($, planName)
+    if (!cur) return { text: 'No active plan for this branch yet.' }
 
-    return {
-      text: cur
-        ? `Active plan: ${PLANS}/${cur}`
-        : 'No active plan for this branch yet.',
-    }
+    return { text: `Active plan: ${await asPlanPath($, cur)}` }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -279,6 +362,21 @@ export const register: Register = (on, options) => {
     // Rage meter: +1 for this prompt if it trips any trigger (one point per message).
     if (isRage(e.text ?? '')) await update($, sessCuss, n => n + 1)
 
+    // Inline refresh token: `/planPathRefresh` anywhere in the prompt switches the
+    // active plan to the newest plan file across all layers (handy after a reload
+    // left an old plan active). The token is stripped so the model never sees it.
+    const text = e.text ?? ''
+    if (/\/planPathRefresh\b/i.test(text)) {
+      const path = await newestPlan($)
+      if (path) {
+        await update($, planName, () => path)
+        if (branch) await $.store.set(`plan:${branch}`, path)
+      }
+      const stripped = text.replace(/\s*\/planPathRefresh\b\s*/gi, ' ').trim()
+
+      return next({ ...e, text: stripped })
+    }
+
     return next(e)
   })
 
@@ -300,7 +398,11 @@ export const register: Register = (on, options) => {
     // already-known plan, but resuming and reading the plan still populates it.
     const isMut = e.tool === 'Write' || e.tool === 'Edit'
     const isRead = e.tool === 'Read'
-    const planMatch = isMut || isRead ? fp.match(PLAN_RE) : null
+    // A plan touch: `.claude/plans/<name>.md` anywhere (profile or project), OR a
+    // repo plan at `<repoRoot>/<child>/plans/<name>.md`. The full touched path is
+    // stored (not just the name), so the link/marker are unambiguous.
+    const isPlan =
+      (isMut || isRead) && (PLAN_RE.test(fp) || matchProjectPlan(fp) !== null)
     const artMatch = isMut || isRead ? fp.match(ART_RE) : null
 
     if (e.agentId === undefined) tools += 1
@@ -338,15 +440,15 @@ export const register: Register = (on, options) => {
       }
     }
     // Plan: a Write sets + persists per branch; a Read bootstraps $.state when unset.
-    if (planMatch?.[1]) {
-      const name = planMatch[1]
+    if (isPlan) {
+      const path = fp.replace(/\\/g, '/')
       const prev = await read($, planName)
-      const take = isMut ? name !== prev : prev === null
+      const take = isMut ? path !== prev : prev === null
       if (take) {
-        await update($, planName, () => name)
-        if (isMut && branch) await $.store.set(`plan:${branch}`, name)
+        await update($, planName, () => path)
+        if (isMut && branch) await $.store.set(`plan:${branch}`, path)
         try {
-          const text = await $.fs.read(`${PLANS}/${name}`)
+          const text = await $.fs.read(path)
           const marker = text.match(MARKER_RE)
           if (marker?.[1]) {
             const dir = await resolveArtifactDir($, repoRoot, marker[1])
@@ -379,9 +481,10 @@ export const register: Register = (on, options) => {
     const pm = (e.answer ?? '').match(PLAN_PATH_RE)
     if (pm?.[1] && (await read($, planName)) === null) {
       const name = pm[1]
-      await update($, planName, () => name)
+      const path = (await resolvePlanPath($, name)) ?? `${PLANS}/${name}`
+      await update($, planName, () => path)
       try {
-        const text = await $.fs.read(`${PLANS}/${name}`)
+        const text = await $.fs.read(path)
         const marker = text.match(MARKER_RE)
         if (marker?.[1]) {
           const dir = await resolveArtifactDir($, repoRoot, marker[1])
@@ -482,13 +585,16 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
+    // The atom holds a full path (legacy bare names are resolved by asPlanPath).
+    const planPath = plan ? await asPlanPath($, plan) : ''
+
     const { Box, Text, Button, Link } = $.ui.resolve(e)
 
     return (
       <Box flexWrap="wrap">
         <Text dimColor>{`session ${sessionTools} tools · ${fmtTokens(tok)} tok `}</Text>
         {plan && <Text dimColor>· plan: </Text>}
-        {plan && <Link href={`vscode://file/${PLANS}/${plan}`}>{plan}</Link>}
+        {plan && <Link href={`vscode://file/${planPath}`}>{baseName(planPath)}</Link>}
         {w && <Text dimColor> · </Text>}
         {w &&
           (workItemsUrl ? (

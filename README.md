@@ -99,7 +99,19 @@ Session-scoped: it resets on a new session and survives `/reload-plugins`.
 ### Commands
 
 - `/activity` — open/re-open the activity pane.
-- `/plan` — show the active plan for this branch; `/plan <name-fragment>` sets it.
+- `/plan` — show the active plan for this branch; `/plan <name-fragment>` sets it (searches every plan location; the newest-modified match wins).
+
+### Plan refresh token
+
+Drop **`/planPathRefresh`** anywhere in an ordinary prompt and, on submit, `activity` switches the active plan to the **newest** plan file across every searched location, persists it for the branch, and **strips the token** before the prompt reaches the model. Handy when a `/reload-plugins` left an old plan active — a bare reload keeps the previously-set plan, this re-picks the latest.
+
+```
+fix the drawer bug /planPathRefresh   →   model sees "fix the drawer bug"; band jumps to the newest plan
+```
+
+Case-insensitive and position-independent (start, middle, or end). If no plan files exist anywhere, the token is still stripped and the active plan is left unchanged.
+
+**Where plans are searched** (newest `mtime` wins on a tie): the profile `~/.claude/plans`, plus the repo's `<repoRoot>/.claude/plans` and any `<repoRoot>/<dir>/plans`.
 
 ---
 

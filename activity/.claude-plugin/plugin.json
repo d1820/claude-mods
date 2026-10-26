@@ -1,6 +1,6 @@
 {
   "name": "activity",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": { "name": "Dan Turco" },
   "description": "Live activity: turn time + tool count in a band, per-tool and subagent detail (status, elapsed, turns, tokens) in a pane, and a native notification when a long turn ends or Claude asks a question.",
   "types": "./types/index.d.ts",
