@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register, EngineInterface } from 'claude-code'
+import type { Register, EngineInterface, FsEntry } from 'claude-code'
 
 import type { ToolCall } from '../types'
 
@@ -69,6 +69,10 @@ const sessionTok = atom({ plugin: 'activity', key: 'sessionTok2' } as const, 0)
 const planName = atom({ plugin: 'activity', key: 'planName' } as const, null)
 const wi = atom({ plugin: 'activity', key: 'wi' } as const, null)
 const artifactDir = atom({ plugin: 'activity', key: 'artifactDir' } as const, null)
+// Every distinct slug folder this session has WRITTEN to (base included). Length
+// > 1 means I spread scratch across folders — the pane flags it so you can tell
+// me to consolidate into the pinned base. Session-scoped, like the counters.
+const artifactSlugs = atom({ plugin: 'activity', key: 'artifactSlugs' } as const, [])
 const agentStart = atom({ plugin: 'activity', key: 'agentStart' } as const, {})
 const agentUsage = atom({ plugin: 'activity', key: 'agentUsage' } as const, {})
 const sessTurns = atom({ plugin: 'activity', key: 'sessTurns' } as const, 0)
@@ -114,6 +118,50 @@ async function resolveArtifactDir(
   }
 
   return null
+}
+
+// Record a slug folder I touched. The FIRST one pins the session base (shown in
+// the pane) and, when it's a real write on a known branch, persists per branch so
+// it survives reloads. Writes to any OTHER folder are added to the drift set only
+// (never repoint the base) — a read never counts, so a reference-read can't inflate
+// the drift. isMut:false callers (plan markers, answer-text) only ever pin the base.
+async function noteSlug(
+  $: EngineInterface,
+  dir: string,
+  opts: { isMut?: boolean; branch?: string } = {},
+): Promise<void> {
+  const cur = await read($, artifactDir)
+  if (cur === null) {
+    await update($, artifactDir, () => dir)
+    if (opts.isMut && opts.branch) await $.store.set(`artifact:${opts.branch}`, dir)
+    await update($, artifactSlugs, list => (list.includes(dir) ? list : [...list, dir]))
+  } else if (opts.isMut) {
+    await update($, artifactSlugs, list => (list.includes(dir) ? list : [...list, dir]))
+  }
+}
+
+// Files under a folder, counted recursively ($.fs.list is one level; artifacts
+// nest scratch in subfolders). Depth-capped so a deep tree can't stall a render.
+async function countFilesDeep(
+  $: EngineInterface,
+  dir: string,
+  depth = 0,
+): Promise<number> {
+  if (depth > 6) return 0
+  let entries: FsEntry[]
+  try {
+    entries = await $.fs.list(dir)
+  } catch {
+    return 0
+  }
+  let n = 0
+  for (const entry of entries) {
+    if (entry.kind === 'file') n++
+    else if (entry.kind === 'dir') {
+      n += await countFilesDeep($, `${dir}/${entry.name}`, depth + 1)
+    }
+  }
+  return n
 }
 
 // Current git branch + repo root (module scope so top-level helpers can use them;
@@ -429,15 +477,9 @@ export const register: Register = (on, options) => {
     )
 
     // Artifacts: full folder path from the actual touch (covers profile AND
-    // project .claude). Write sets it; a Read bootstraps only when unset.
+    // project .claude). First slug pins the base; later writes grow the drift set.
     if (artMatch?.[1]) {
-      const dir = artMatch[1].replace(/\\/g, '/')
-      const cur = await read($, artifactDir)
-      if (isMut || cur === null) {
-        await update($, artifactDir, () => dir)
-        // Durable per branch (like the plan) so it survives reloads/new sessions.
-        if (isMut && branch) await $.store.set(`artifact:${branch}`, dir)
-      }
+      await noteSlug($, artMatch[1].replace(/\\/g, '/'), { isMut, branch })
     }
     // Plan: a Write sets + persists per branch; a Read bootstraps $.state when unset.
     if (isPlan) {
@@ -452,7 +494,7 @@ export const register: Register = (on, options) => {
           const marker = text.match(MARKER_RE)
           if (marker?.[1]) {
             const dir = await resolveArtifactDir($, repoRoot, marker[1])
-            if (dir) await update($, artifactDir, () => dir)
+            if (dir) await noteSlug($, dir)
           }
         } catch {
           /* ignore */
@@ -488,7 +530,7 @@ export const register: Register = (on, options) => {
         const marker = text.match(MARKER_RE)
         if (marker?.[1]) {
           const dir = await resolveArtifactDir($, repoRoot, marker[1])
-          if (dir) await update($, artifactDir, () => dir)
+          if (dir) await noteSlug($, dir)
         }
       } catch {
         /* ignore */
@@ -503,13 +545,12 @@ export const register: Register = (on, options) => {
         /([A-Za-z]:[\\/][^\s"'`<>|]*?[\\/]\.claude[\\/]artifacts[\\/][^\s"'`<>|\\/]+)/i,
       )
       if (full?.[1]) {
-        const dir = full[1].replace(/\\/g, '/')
-        await update($, artifactDir, () => dir)
+        await noteSlug($, full[1].replace(/\\/g, '/'))
       } else {
         const am = ans.match(ART_SLUG_RE)
         if (am?.[1]) {
           const resolved = await resolveArtifactDir($, repoRoot, am[1])
-          if (resolved) await update($, artifactDir, () => resolved)
+          if (resolved) await noteSlug($, resolved)
         }
       }
     }
@@ -620,6 +661,7 @@ export const register: Register = (on, options) => {
     const starts = await read($, agentStart)
     const usage = await read($, agentUsage)
     const dir = await read($, artifactDir)
+    const slugs = await read($, artifactSlugs)
     const now = await $.clock.now()
     const agents = await $.agent.list()
     const sTurns = await read($, sessTurns)
@@ -627,15 +669,11 @@ export const register: Register = (on, options) => {
     const cuss = await read($, sessCuss)
     const intr = sTurns > 0 ? `interrupts ${sAborts}/${sTurns}` : ''
 
-    let artCount = 0
-    if (dir) {
-      try {
-        const files = await $.fs.list(dir)
-        artCount = files.filter(f => f.kind === 'file').length
-      } catch {
-        /* folder gone */
-      }
-    }
+    // Recursive count of the pinned base slug; its name for the label; and how many
+    // distinct slug folders I've written to (> 1 = drift worth surfacing).
+    const artCount = dir ? await countFilesDeep($, dir) : 0
+    const baseSlug = dir ? (dir.split('/').filter(Boolean).pop() ?? '') : ''
+    const slugCount = slugs.length
 
     const toolRows = Object.entries(toolMap)
       .sort((a, b) => b[1].ms - a[1].ms)
@@ -652,7 +690,10 @@ export const register: Register = (on, options) => {
             </Text>
             {dir && <Text dimColor>{'  ·  '}</Text>}
             {dir && (
-              <Link href={`file:///${dir}`}>{`view ${artCount} artifacts`}</Link>
+              <Link href={`file:///${dir}`}>{`${artCount} artifacts in ${baseSlug}`}</Link>
+            )}
+            {dir && slugCount > 1 && (
+              <Text dimColor>{`  (${slugCount} slug folders)`}</Text>
             )}
           </Box>
           <Box>

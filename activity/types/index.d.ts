@@ -20,6 +20,7 @@ declare module 'claude-code' {
       planName: string | null
       wi: string | null
       artifactDir: string | null
+      artifactSlugs: string[]
       agentStart: Record<string, number>
       agentUsage: Record<string, AgentUsage>
       sessTurns: number
